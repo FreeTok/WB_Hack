@@ -14,9 +14,10 @@ model = YOLO("yolo11n.pt", verbose=False)  # load an official model
 # model = YOLO("path/to/best.pt")  # load a custom model
 
 # Загрузка ResNet для извлечения признаков
-model_resnet = models.resnet50(pretrained=True)
-model_resnet = torch.nn.Sequential(*list(model_resnet.children())[:-1])
-model_resnet.eval()
+# model_1 = models.resnet50(pretrained=True)
+model_1 = models.efficientnet_b0(pretrained=True)
+model_1 = torch.nn.Sequential(*list(model_1.children())[:-1])
+model_1.eval()
 
 # Преобразование изображений для ResNet
 transform = transforms.Compose([
@@ -34,7 +35,6 @@ def get_detections(results):
     
     return res
 
-index = 0
 # Функция для извлечения объектов
 def crop_objects(image, detections):
     global index
@@ -54,11 +54,11 @@ def crop_objects(image, detections):
 def get_feature_vector(image):
     image = transform(image).unsqueeze(0)
     with torch.no_grad():
-        features = model_resnet(image)
+        features = model_1(image)
     return features.squeeze().numpy()
 
 # Функция для сравнения feature vectors
-def compare_features(features1, features2, threshold=0.75):
+def compare_features(features1, features2, threshold=0.6):
     for i, f1 in enumerate(features1):
         for j, f2 in enumerate(features2):
             similarity = cosine_similarity(f1.reshape(1, -1), f2.reshape(1, -1))
@@ -93,40 +93,52 @@ def compare_images(img1, img2):
 
     if len(features1) == 0 or len(features2) == 0: return False
 
+    ########################
+    global index 
+    if compare_features(features1, features2):
+        cropped_images1[0].save(f'test/frame_{index}.jpg')
+        index += 1
+        cropped_images2[0].save(f'test/frame_{index}.jpg')
+        index += 1
+    ########################
+
     # Сравнение объектов
     return compare_features(features1, features2)
 
+index = 0
+def compare_video_image(img, cap):
+    matched = False
+    timecodes = []
+    # Параметры для извлечения кадров
+    frame_rate = 1  # 1 кадр в секунду
+    frame_count = 0
+    fps = int(cap.get(cv2.CAP_PROP_FPS))  # Получаем FPS видео
 
-img1 = Image.open('Input/A60/image1.jpg')
-# img2 = Image.open('Input/A60/video.jpg')
+    while cap.isOpened():
+        ret, frame = cap.read()
+        if not ret:
+            break
 
-# compare_images(img1, img2)
+        # Извлечение кадров с заданной частотой
+        if frame_count % (fps * frame_rate) == 0:
+            # Преобразование кадра в PIL Image
+            frame_pil = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+
+            if compare_images(img, frame_pil):
+                matched = True
+                timecodes.append(frame_count / fps)
 
 
-# Загрузка видео
-video_path = 'Input/A60/video.mp4'
-cap = cv2.VideoCapture(video_path)
+        frame_count += 1
 
-# Параметры для извлечения кадров
-frame_rate = 1  # 1 кадр в секунду
-frame_count = 0
-fps = int(cap.get(cv2.CAP_PROP_FPS))  # Получаем FPS видео
+    cap.release()
 
-while cap.isOpened():
-    ret, frame = cap.read()
-    if not ret:
-        break
+    return (matched, timecodes)
 
-    # Извлечение кадров с заданной частотой
-    if frame_count % (fps * frame_rate) == 0:
-        # Преобразование кадра в PIL Image
-        frame_pil = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+# img = Image.open('input/Dress/image1.jpg')
+# video = cv2.VideoCapture('input/Dress/video.mp4')
 
-        if compare_images(img1, frame_pil):
-            print(frame_count / fps)
-            frame_pil.save(f'frame_{index}.jpg')
-            index += 1
+img = Image.open('input/dress/image.jpg')
+video = cv2.VideoCapture('input/dress/video.mp4')
 
-    frame_count += 1
-
-cap.release()
+print(compare_video_image(img, video))
