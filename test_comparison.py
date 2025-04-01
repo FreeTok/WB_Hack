@@ -1,3 +1,4 @@
+import os
 from ultralytics import YOLO
 
 import torch
@@ -42,23 +43,29 @@ def crop_objects(image, detections):
 
     cropped_images = []
     for detection in detections:
-        xmin, ymin, xmax, ymax = detection
-        cropped_image = image.crop((xmin, ymin, xmax, ymax))
-        cropped_images.append(cropped_image)
-        
-        index += 1
+        xmin, ymin, xmax, ymax = [int(coord) for coord in detection]  # Ensure coordinates are integers
+        try:
+            cropped_image = image.crop((xmin, ymin, xmax, ymax))
+            if cropped_image.size[0] > 0 and cropped_image.size[1] > 0:  # Check if not empty
+                cropped_images.append(cropped_image)
+                index += 1
+        except:
+            continue
 
-    return cropped_images
+    return cropped_images if cropped_images else None
 
 # Функция для извлечения feature vectors
 def get_feature_vector(image):
+    # Convert RGBA to RGB if needed
+    if image.mode == 'RGBA':
+        image = image.convert('RGB')
     image = transform(image).unsqueeze(0)
     with torch.no_grad():
         features = model_1(image)
     return features.squeeze().numpy()
 
 # Функция для сравнения feature vectors
-def compare_features(features1, features2, threshold=0.6):
+def compare_features(features1, features2, threshold=0.7):
     for i, f1 in enumerate(features1):
         for j, f2 in enumerate(features2):
             similarity = cosine_similarity(f1.reshape(1, -1), f2.reshape(1, -1))
@@ -70,6 +77,12 @@ def compare_features(features1, features2, threshold=0.6):
 def compare_images(img1, img2):
     if not img1 or not img2: return False
 
+    # Convert to RGB if needed
+    if img1.mode != 'RGB':
+        img1 = img1.convert('RGB')
+    if img2.mode != 'RGB':
+        img2 = img2.convert('RGB')
+    
     # Predict with the model
     results1 = model(img1, verbose=False)  # predict on an image
     results2 = model(img2, verbose=False)  # predict on an image
@@ -106,7 +119,13 @@ def compare_images(img1, img2):
     return compare_features(features1, features2)
 
 index = 0
-def compare_video_image(img, cap):
+def compare_video_image(imgPath, capPath):
+    if not os.path.exists(imgPath) or not os.path.exists(capPath):
+        return None
+    
+    img = Image.open(imgPath)
+    cap = cv2.VideoCapture(capPath)
+
     matched = False
     timecodes = []
     # Параметры для извлечения кадров
@@ -138,7 +157,7 @@ def compare_video_image(img, cap):
 # img = Image.open('input/Dress/image1.jpg')
 # video = cv2.VideoCapture('input/Dress/video.mp4')
 
-img = Image.open('input/dress/image.jpg')
-video = cv2.VideoCapture('input/dress/video.mp4')
+# imgPath = 'input/dress/image.jpg'
+# videoPath = 'input/dress/video.mp4'
 
-print(compare_video_image(img, video))
+# print(compare_video_image(imgPath, videoPath))
