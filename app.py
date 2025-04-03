@@ -90,47 +90,197 @@ def run_check():
     # Получаем путь к папке с данными
     data_folder = folder_paths["folder1"]
     
-    # Получаем абсолютный путь к текущему скрипту
-    current_dir = os.path.dirname(os.path.abspath(__file__))
+    # Создаем именованный временный файл для логов
+    log_file = "debug_log.txt"
+    with open(log_file, 'w', encoding='utf-8') as f:
+        f.write(f"Начало проверки с индексом {index} и папкой {data_folder}\n")
     
-    # Прямой вызов test_model.py через Python
+    # Создаем простой скрипт для теста базовой функциональности
+    test_script = "debug_test.py"
+    with open(test_script, 'w', encoding='utf-8') as f:
+        f.write("""
+import sys
+import os
+import json
+
+# Запись в лог-файл для отладки
+def log(message):
+    with open('debug_log.txt', 'a', encoding='utf-8') as f:
+        f.write(message + '\\n')
+
+log("Тестовый скрипт запущен")
+
+# Выводим информацию о среде
+log(f"Python: {sys.version}")
+log(f"Текущая директория: {os.getcwd()}")
+log(f"sys.path: {sys.path}")
+
+# Проверка наличия файлов
+test_model_exists = os.path.exists('test_model.py')
+test_comparison_exists = os.path.exists('test_comparison.py')
+log(f"test_model.py существует: {test_model_exists}")
+log(f"test_comparison.py существует: {test_comparison_exists}")
+
+# Пытаемся импортировать модули
+try:
+    log("Пытаемся импортировать test_model...")
+    import test_model
+    log("Импорт test_model успешен")
+    
+    # Смотрим, какие функции есть в модуле
+    log(f"Функции в test_model: {dir(test_model)}")
+    
+    # Проверяем наличие функции check
+    if hasattr(test_model, 'check'):
+        log("Функция check найдена")
+    else:
+        log("Функция check НЕ найдена!")
+    
+except Exception as e:
+    log(f"Ошибка при импорте test_model: {e}")
+
+# Возвращаем успешный результат для отладки
+print(json.dumps({"result": "Отладочный запуск успешно выполнен. Проверьте файл debug_log.txt для деталей."}, ensure_ascii=False))
+""")
+    
+    # Запускаем отладочный скрипт
     try:
-        # Запускаем Python с аргументами для передачи в test_model.py
-        cmd = [
-            sys.executable,
-            os.path.join(current_dir, "test_model.py"),
-            str(index),
-            data_folder
-        ]
-        
         # Выводим информацию для отладки
-        print(f"Запуск команды: {cmd}")
+        print(f"Запуск отладочного скрипта: {test_script}")
         
         # Запускаем процесс
         process = subprocess.Popen(
-            cmd,
+            [sys.executable, test_script],
             stdout=subprocess.PIPE, 
             stderr=subprocess.PIPE,
-            universal_newlines=True
+            universal_newlines=True,
+            encoding='utf-8'
         )
         
         # Получаем результаты
         stdout, stderr = process.communicate()
         
-        # Выводим результаты в интерфейс
-        with use_scope("results", clear=True):
-            if stderr:
-                put_error("Произошла ошибка при выполнении проверки:")
-                put_code(stderr)
+        # Добавляем результаты запуска в лог
+        with open(log_file, 'a', encoding='utf-8') as f:
+            f.write(f"\n--- Результат выполнения отладочного скрипта ---\n")
+            f.write(f"stdout: {stdout}\n")
+            f.write(f"stderr: {stderr}\n")
+        
+        # Теперь запускаем реальную проверку
+        real_script = "real_check.py"
+        with open(real_script, 'w', encoding='utf-8') as f:
+            f.write(f"""
+import sys
+import os
+import json
+
+# Запись в лог-файл для отладки
+def log(message):
+    with open('debug_log.txt', 'a', encoding='utf-8') as f:
+        f.write(str(message) + '\\n')
+
+log("\\n--- Начало выполнения основного скрипта ---")
+
+# Добавляем текущую директорию в путь поиска
+current_dir = os.path.dirname(os.path.abspath(__file__))
+if current_dir not in sys.path:
+    sys.path.append(current_dir)
+    log(f"Добавлен путь: {{current_dir}}")
+
+# Импортируем функцию check из test_model.py
+try:
+    log("Пытаемся импортировать test_model...")
+    from test_model import check
+    log("Импорт test_model успешен")
+    
+    # Запускаем проверку с указанным индексом и путем к данным
+    log("Запуск проверки...")
+    data_folder = r"{data_folder}"
+    log(f"Индекс: {index}, Папка: {{data_folder}}")
+    
+    result = check({index}, data_folder=data_folder)
+    log("Проверка завершена")
+    log(f"Результат: {{result}}")
+    
+    # Выводим результат в JSON формате
+    json_result = json.dumps({{"result": result}}, ensure_ascii=False)
+    print(json_result)
+except Exception as e:
+    import traceback
+    error = traceback.format_exc()
+    log(f"Ошибка: {{e}}")
+    log(f"Трассировка: {{error}}")
+    json_result = json.dumps({{"error": str(e), "traceback": error}}, ensure_ascii=False)
+    print(json_result)
+""")
+        
+        # Запускаем основной скрипт проверки
+        log_process = subprocess.Popen(
+            [sys.executable, real_script],
+            stdout=subprocess.PIPE, 
+            stderr=subprocess.PIPE,
+            universal_newlines=True,
+            encoding='utf-8'
+        )
+        
+        # Получаем результаты с таймаутом
+        try:
+            real_stdout, real_stderr = log_process.communicate(timeout=120)  # Ждем результат максимум 120 секунд
             
-            put_markdown("## Результаты проверки")
-            put_code(stdout)
+            # Добавляем результаты запуска в лог
+            with open(log_file, 'a', encoding='utf-8') as f:
+                f.write(f"\n--- Результат выполнения основного скрипта ---\n")
+                f.write(f"stdout: {real_stdout}\n")
+                f.write(f"stderr: {real_stderr}\n")
+            
+            # Обрабатываем результаты
+            with use_scope("results", clear=True):
+                if real_stderr:
+                    put_error("Произошла ошибка при выполнении проверки:")
+                    put_code(real_stderr)
+                
+                # Проверяем, есть ли вывод
+                if not real_stdout:
+                    put_error("Скрипт не вернул никаких данных!")
+                    put_text(f"Проверьте файл отладки {log_file} для деталей")
+                    put_file('debug_log.txt', open(log_file, 'rb').read(), 'Скачать лог для отладки')
+                    return
+                
+                # Пробуем прочитать JSON
+                try:
+                    result_data = json.loads(real_stdout)
+                    
+                    if "error" in result_data:
+                        put_error("Ошибка при выполнении проверки:")
+                        put_code(result_data["error"])
+                        if "traceback" in result_data:
+                            put_code(result_data["traceback"])
+                    else:
+                        put_markdown("## Результаты проверки")
+                        put_code(result_data["result"])
+                except json.JSONDecodeError:
+                    # Если не удалось разобрать JSON, выводим как обычный текст
+                    put_markdown("## Результаты проверки (не в формате JSON)")
+                    put_code(real_stdout)
+                
+                # Добавляем ссылку на лог для отладки
+                put_text("Для отладки доступен подробный лог:")
+                put_file('debug_log.txt', open(log_file, 'rb').read(), 'Скачать лог')
+        
+        except subprocess.TimeoutExpired:
+            log_process.kill()
+            with use_scope("results", clear=True):
+                put_error("Время выполнения проверки истекло (превышено 120 секунд)")
+                put_text("Проверьте файл debug_log.txt для деталей")
+                put_file('debug_log.txt', open(log_file, 'rb').read(), 'Скачать лог для отладки')
     
     except Exception as e:
         import traceback
         with use_scope("results", clear=True):
             put_error(f"Ошибка при запуске проверки: {str(e)}")
             put_code(traceback.format_exc())
+            if os.path.exists(log_file):
+                put_file('debug_log.txt', open(log_file, 'rb').read(), 'Скачать лог для отладки')
 
 def main():
     """Основная функция приложения"""

@@ -26,7 +26,7 @@ def get_feature_model():
     global global_model_1
     if global_model_1 is None:
         # Загружаем модель, если она еще не загружена
-        global_model_1 = models.efficientnet_b0(pretrained=True)
+        global_model_1 = models.efficientnet_b0(weights=models.EfficientNet_B0_Weights.DEFAULT)
         global_model_1 = torch.nn.Sequential(*list(global_model_1.children())[:-1])
         global_model_1.eval()
         
