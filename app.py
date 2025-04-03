@@ -1,7 +1,7 @@
 from pywebio import start_server
 from pywebio.output import *
 from pywebio.input import input as pyinput
-from pywebio.session import set_env, run_js
+from pywebio.session import set_env, run_js, register_thread, info
 import tkinter as tk
 from tkinter import filedialog
 import threading
@@ -12,6 +12,9 @@ import json
 import os
 import subprocess
 import sys
+
+# Импортируем модуль для предварительной загрузки моделей
+from model_preloader import start_preloading, get_loading_status
 
 # Файл для сохранения путей к папкам
 PATHS_FILE = "saved_paths.json"
@@ -74,6 +77,12 @@ def check_results():
 
 def run_check():
     """Запускает проверку с указанным индексом"""
+    # Проверяем, готовы ли модели
+    status = get_loading_status()
+    if not status["loaded"]:
+        put_error(f"Модели еще не загружены. Пожалуйста, подождите.\n{status['status']}")
+        return
+    
     # Сначала получаем индекс от пользователя
     index = pyinput("Введите индекс записи для проверки:", type='number', value=0)
     
@@ -86,7 +95,7 @@ def run_check():
     with use_scope("results", clear=True):
         put_loading(shape='grow')
         put_text("Запуск проверки, пожалуйста подождите...")
-
+    
     # Получаем путь к папке с данными
     data_folder = folder_paths["folder1"]
     
@@ -95,198 +104,186 @@ def run_check():
     with open(log_file, 'w', encoding='utf-8') as f:
         f.write(f"Начало проверки с индексом {index} и папкой {data_folder}\n")
     
-    # Создаем простой скрипт для теста базовой функциональности
-    test_script = "debug_test.py"
-    with open(test_script, 'w', encoding='utf-8') as f:
-        f.write("""
-import sys
-import os
-import json
-
-# Запись в лог-файл для отладки
-def log(message):
-    with open('debug_log.txt', 'a', encoding='utf-8') as f:
-        f.write(message + '\\n')
-
-log("Тестовый скрипт запущен")
-
-# Выводим информацию о среде
-log(f"Python: {sys.version}")
-log(f"Текущая директория: {os.getcwd()}")
-log(f"sys.path: {sys.path}")
-
-# Проверка наличия файлов
-test_model_exists = os.path.exists('test_model.py')
-test_comparison_exists = os.path.exists('test_comparison.py')
-log(f"test_model.py существует: {test_model_exists}")
-log(f"test_comparison.py существует: {test_comparison_exists}")
-
-# Пытаемся импортировать модули
-try:
-    log("Пытаемся импортировать test_model...")
-    import test_model
-    log("Импорт test_model успешен")
-    
-    # Смотрим, какие функции есть в модуле
-    log(f"Функции в test_model: {dir(test_model)}")
-    
-    # Проверяем наличие функции check
-    if hasattr(test_model, 'check'):
-        log("Функция check найдена")
-    else:
-        log("Функция check НЕ найдена!")
-    
-except Exception as e:
-    log(f"Ошибка при импорте test_model: {e}")
-
-# Возвращаем успешный результат для отладки
-print(json.dumps({"result": "Отладочный запуск успешно выполнен. Проверьте файл debug_log.txt для деталей."}, ensure_ascii=False))
-""")
-    
-    # Запускаем отладочный скрипт
     try:
-        # Выводим информацию для отладки
-        print(f"Запуск отладочного скрипта: {test_script}")
+        # Импортируем функцию напрямую
+        from test_model import check
         
-        # Запускаем процесс
-        process = subprocess.Popen(
-            [sys.executable, test_script],
-            stdout=subprocess.PIPE, 
-            stderr=subprocess.PIPE,
-            universal_newlines=True,
-            encoding='utf-8'
-        )
+        # Запускаем проверку в основном потоке
+        # Это блокирует интерфейс, но зато надежно работает
+        result = check(index, data_folder=data_folder)
         
-        # Получаем результаты
-        stdout, stderr = process.communicate()
-        
-        # Добавляем результаты запуска в лог
-        with open(log_file, 'a', encoding='utf-8') as f:
-            f.write(f"\n--- Результат выполнения отладочного скрипта ---\n")
-            f.write(f"stdout: {stdout}\n")
-            f.write(f"stderr: {stderr}\n")
-        
-        # Теперь запускаем реальную проверку
-        real_script = "real_check.py"
-        with open(real_script, 'w', encoding='utf-8') as f:
-            f.write(f"""
-import sys
-import os
-import json
-
-# Запись в лог-файл для отладки
-def log(message):
-    with open('debug_log.txt', 'a', encoding='utf-8') as f:
-        f.write(str(message) + '\\n')
-
-log("\\n--- Начало выполнения основного скрипта ---")
-
-# Добавляем текущую директорию в путь поиска
-current_dir = os.path.dirname(os.path.abspath(__file__))
-if current_dir not in sys.path:
-    sys.path.append(current_dir)
-    log(f"Добавлен путь: {{current_dir}}")
-
-# Импортируем функцию check из test_model.py
-try:
-    log("Пытаемся импортировать test_model...")
-    from test_model import check
-    log("Импорт test_model успешен")
-    
-    # Запускаем проверку с указанным индексом и путем к данным
-    log("Запуск проверки...")
-    data_folder = r"{data_folder}"
-    log(f"Индекс: {index}, Папка: {{data_folder}}")
-    
-    result = check({index}, data_folder=data_folder)
-    log("Проверка завершена")
-    log(f"Результат: {{result}}")
-    
-    # Выводим результат в JSON формате
-    json_result = json.dumps({{"result": result}}, ensure_ascii=False)
-    print(json_result)
-except Exception as e:
-    import traceback
-    error = traceback.format_exc()
-    log(f"Ошибка: {{e}}")
-    log(f"Трассировка: {{error}}")
-    json_result = json.dumps({{"error": str(e), "traceback": error}}, ensure_ascii=False)
-    print(json_result)
-""")
-        
-        # Запускаем основной скрипт проверки
-        log_process = subprocess.Popen(
-            [sys.executable, real_script],
-            stdout=subprocess.PIPE, 
-            stderr=subprocess.PIPE,
-            universal_newlines=True,
-            encoding='utf-8'
-        )
-        
-        # Получаем результаты с таймаутом
-        try:
-            real_stdout, real_stderr = log_process.communicate(timeout=120)  # Ждем результат максимум 120 секунд
+        # Обновляем UI с результатами
+        with use_scope("results", clear=True):
+            put_markdown("## Результаты проверки")
+            put_code(result)
             
-            # Добавляем результаты запуска в лог
-            with open(log_file, 'a', encoding='utf-8') as f:
-                f.write(f"\n--- Результат выполнения основного скрипта ---\n")
-                f.write(f"stdout: {real_stdout}\n")
-                f.write(f"stderr: {real_stderr}\n")
+            # Добавляем ссылку на лог для отладки
+            put_text("Для отладки доступен подробный лог:")
+            put_file('debug_log.txt', open(log_file, 'rb').read(), 'Скачать лог')
             
-            # Обрабатываем результаты
-            with use_scope("results", clear=True):
-                if real_stderr:
-                    put_error("Произошла ошибка при выполнении проверки:")
-                    put_code(real_stderr)
-                
-                # Проверяем, есть ли вывод
-                if not real_stdout:
-                    put_error("Скрипт не вернул никаких данных!")
-                    put_text(f"Проверьте файл отладки {log_file} для деталей")
-                    put_file('debug_log.txt', open(log_file, 'rb').read(), 'Скачать лог для отладки')
-                    return
-                
-                # Пробуем прочитать JSON
-                try:
-                    result_data = json.loads(real_stdout)
-                    
-                    if "error" in result_data:
-                        put_error("Ошибка при выполнении проверки:")
-                        put_code(result_data["error"])
-                        if "traceback" in result_data:
-                            put_code(result_data["traceback"])
-                    else:
-                        put_markdown("## Результаты проверки")
-                        put_code(result_data["result"])
-                except json.JSONDecodeError:
-                    # Если не удалось разобрать JSON, выводим как обычный текст
-                    put_markdown("## Результаты проверки (не в формате JSON)")
-                    put_code(real_stdout)
-                
-                # Добавляем ссылку на лог для отладки
-                put_text("Для отладки доступен подробный лог:")
-                put_file('debug_log.txt', open(log_file, 'rb').read(), 'Скачать лог')
-        
-        except subprocess.TimeoutExpired:
-            log_process.kill()
-            with use_scope("results", clear=True):
-                put_error("Время выполнения проверки истекло (превышено 120 секунд)")
-                put_text("Проверьте файл debug_log.txt для деталей")
-                put_file('debug_log.txt', open(log_file, 'rb').read(), 'Скачать лог для отладки')
-    
     except Exception as e:
         import traceback
+        error_trace = traceback.format_exc()
+        
+        # Записываем ошибку в лог
+        with open(log_file, 'a', encoding='utf-8') as f:
+            f.write(f"\nОшибка при выполнении проверки:\n{str(e)}\n")
+            f.write(error_trace)
+        
+        # Обновляем UI с сообщением об ошибке
         with use_scope("results", clear=True):
-            put_error(f"Ошибка при запуске проверки: {str(e)}")
-            put_code(traceback.format_exc())
-            if os.path.exists(log_file):
-                put_file('debug_log.txt', open(log_file, 'rb').read(), 'Скачать лог для отладки')
+            put_error("Произошла ошибка при выполнении проверки:")
+            put_code(str(e))
+            put_code(error_trace)
+            put_file('debug_log.txt', open(log_file, 'rb').read(), 'Скачать лог для отладки')
+
+# Функция для обновления состояния загрузки на странице
+def update_loading_status():
+    """Обновляет статус загрузки моделей на странице"""
+    status = get_loading_status()
+    
+    # Получаем процент загрузки
+    progress = status["progress"]
+    
+    # Обновляем статус загрузки
+    run_js(f'''
+        document.getElementById("loading_status").textContent = "{status['status']}";
+        document.getElementById("loading_indicator").style.width = "{progress}%";
+        document.getElementById("progress_text").textContent = "Загружено {status['current']} из {status['total']} моделей ({progress}%)";
+        
+        if ({str(status['loaded']).lower()}) {{
+            // Убираем анимацию индикатора после завершения загрузки
+            document.getElementById("loading_indicator").classList.remove("progress-bar-striped");
+            document.getElementById("loading_indicator").classList.remove("progress-bar-animated");
+            
+            // Обновляем сообщение о статусе
+            document.getElementById("loading_container").className = "alert alert-success";
+        }} else {{
+            // Обновляем сообщение о статусе
+            document.getElementById("loading_container").className = "alert alert-info";
+        }}
+    ''')
+    
+    # Если модели загружены, обновляем кнопку запуска
+    if status['loaded']:
+        with use_scope('check_button_area', clear=True):
+            put_button(
+                label="Запустить проверку", 
+                onclick=run_check, 
+                color='success',
+                disabled=False,
+                scope='check_button_area'
+            )
+    # Если произошла ошибка, тоже обновляем кнопку, но предупреждаем об ошибке
+    elif status['error']:
+        with use_scope('check_button_area', clear=True):
+            put_button(
+                label="Модели не загружены (ошибка)", 
+                onclick=lambda: toast("Необходимо перезапустить приложение"), 
+                color='danger',
+                disabled=False,
+                scope='check_button_area'
+            )
+    
+    # Если есть ошибка, показываем её
+    if status['error']:
+        with use_scope("loading_error", clear=True):
+            put_error("Ошибка при загрузке моделей:")
+            put_code(status['error'])
+    
+    # Если модели загружены, останавливаем таймер
+    if status['loaded']:
+        return False
+    
+    # Иначе продолжаем проверку каждую секунду
+    return True
 
 def main():
     """Основная функция приложения"""
     set_env(title="Проверка товаров в видео")
     
+    # Запускаем загрузку моделей
+    preload_thread = start_preloading()
+    
     put_markdown("# Проверка товаров в видео")
+    
+    # Добавляем контейнер для индикатора загрузки моделей
+    html_loading = """
+    <div id="loading_container" class="alert alert-info">
+        <div style="margin-bottom: 10px;">
+            <strong>Состояние системы:</strong> <span id="loading_status">Загрузка моделей...</span>
+        </div>
+        <div class="progress" style="height: 20px;">
+            <div id="loading_indicator" class="progress-bar progress-bar-striped progress-bar-animated" role="progressbar" 
+                 style="width: 0%;" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100"></div>
+        </div>
+        <div style="text-align: center; margin-top: 5px;">
+            <small id="progress_text">Загружено 0 из 2 моделей (0%)</small>
+        </div>
+    </div>
+    <style>
+        .alert {
+            padding: 15px;
+            margin-bottom: 20px;
+            border: 1px solid transparent;
+            border-radius: 4px;
+        }
+        .alert-info {
+            color: #31708f;
+            background-color: #d9edf7;
+            border-color: #bce8f1;
+        }
+        .alert-success {
+            color: #3c763d;
+            background-color: #dff0d8;
+            border-color: #d6e9c6;
+        }
+        .progress {
+            overflow: hidden;
+            height: 20px;
+            margin-bottom: 5px;
+            background-color: #f5f5f5;
+            border-radius: 4px;
+            box-shadow: inset 0 1px 2px rgba(0,0,0,.1);
+        }
+        .progress-bar {
+            float: left;
+            width: 0;
+            height: 100%;
+            font-size: 12px;
+            line-height: 20px;
+            color: #fff;
+            text-align: center;
+            background-color: #337ab7;
+            box-shadow: inset 0 -1px 0 rgba(0,0,0,.15);
+            transition: width .6s ease;
+        }
+        .progress-bar-striped {
+            background-image: linear-gradient(45deg,rgba(255,255,255,.15) 25%,transparent 25%,transparent 50%,rgba(255,255,255,.15) 50%,rgba(255,255,255,.15) 75%,transparent 75%,transparent);
+            background-size: 40px 40px;
+        }
+        .progress-bar-animated {
+            animation: progress-bar-stripes 2s linear infinite;
+        }
+        @keyframes progress-bar-stripes {
+            from { background-position: 40px 0; }
+            to { background-position: 0 0; }
+        }
+        button.disabled {
+            opacity: 0.65;
+            cursor: not-allowed;
+        }
+        button.success {
+            color: #fff;
+            background-color: #5cb85c;
+            border-color: #4cae4c;
+        }
+    </style>
+    """
+    put_html(html_loading)
+    
+    # Область для вывода ошибок загрузки
+    put_scope("loading_error")
     
     # Информационное сообщение о сохранении путей
     put_info("Выберите папку с данными, содержащую файл videos.json и подпапки с изображениями.")
@@ -310,8 +307,16 @@ def main():
     # Поле для ввода индекса и кнопка запуска проверки
     put_markdown("## Запуск проверки")
     
-    # Добавляем кнопку запуска, которая запросит индекс
-    put_button("Запустить проверку", onclick=run_check, color='success')
+    # Добавляем кнопку запуска с использованием PyWebIO API
+    with use_scope('check_button_area'):
+        # Кнопка будет неактивна при старте, и станет активной после загрузки моделей
+        put_button(
+            label="Загрузка моделей...", 
+            onclick=run_check, 
+            color='primary',
+            disabled=True,
+            scope='check_button_area'
+        )
     
     # Область для вывода результатов
     put_markdown("## Результаты")
@@ -324,7 +329,14 @@ def main():
         put_button("Закрыть приложение", onclick=lambda: exit(), color='danger'),
     ])
     
-    # Запускаем периодическую проверку результатов
+    # Запускаем таймер для обновления статуса загрузки каждую секунду
+    register_thread(info.task_id)
+    
+    # Обновляем статус загрузки каждую секунду
+    while update_loading_status():
+        time.sleep(1)
+    
+    # Запускаем периодическую проверку результатов в основном цикле
     while True:
         check_results()
         time.sleep(0.5)

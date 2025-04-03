@@ -12,39 +12,47 @@ from PIL import Image
 # Глобальные переменные для моделей
 global_model = None
 global_model_1 = None
+global_transform = None
 
 # Функция для получения экземпляра модели
 def get_yolo_model():
     global global_model
     if global_model is None:
         # Загружаем модель, если она еще не загружена
+        print("Загрузка YOLO модели...")
         global_model = YOLO("yolo11n.pt", verbose=False)
+        print("YOLO модель загружена успешно.")
     return global_model
 
 # Функция для получения экземпляра модели извлечения признаков
 def get_feature_model():
-    global global_model_1
+    global global_model_1, global_transform
     if global_model_1 is None:
         # Загружаем модель, если она еще не загружена
+        print("Загрузка EfficientNet модели...")
         global_model_1 = models.efficientnet_b0(weights=models.EfficientNet_B0_Weights.DEFAULT)
         global_model_1 = torch.nn.Sequential(*list(global_model_1.children())[:-1])
         global_model_1.eval()
         
         # Преобразование изображений для EfficientNet
-        global transform
-        transform = transforms.Compose([
+        global_transform = transforms.Compose([
             transforms.Resize((224, 224)),
             transforms.ToTensor(),
             transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
         ])
+        print("EfficientNet модель загружена успешно.")
     return global_model_1
 
-# Преобразование изображений для EfficientNet
-transform = transforms.Compose([
-    transforms.Resize((224, 224)),
-    transforms.ToTensor(),
-    transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-])
+# Функция для получения трансформации для изображений
+def get_transform():
+    global global_transform
+    if global_transform is None:
+        global_transform = transforms.Compose([
+            transforms.Resize((224, 224)),
+            transforms.ToTensor(),
+            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+        ])
+    return global_transform
 
 def get_detections(results):
     if not results or len(results) == 0: return None
@@ -75,8 +83,9 @@ def crop_objects(image, detections):
 
 # Функция для извлечения feature vectors
 def get_feature_vector(image):
-    # Получаем модель
+    # Получаем модель и трансформацию
     model_1 = get_feature_model()
+    transform = get_transform()
     
     # Convert RGBA to RGB if needed
     if image.mode == 'RGBA':
