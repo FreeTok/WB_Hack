@@ -61,7 +61,7 @@ def check(i):
     print(f'lasted: {time.time() - startTime}')
     os.remove(output_video)
 
-check(8)
+check(2)
 
 
 
