@@ -16,9 +16,167 @@ import torch
 import concurrent.futures
 from functools import partial
 import multiprocessing
+import mimetypes
+from pywebio.platform.tornado import start_server as tornado_start_server
+from pywebio.platform.tornado import webio_handler
+from tornado.web import StaticFileHandler, Application
+import tornado.web
+import urllib.parse
 
 # Импортируем модуль для предварительной загрузки моделей
 from model_preloader import start_preloading, get_loading_status
+
+class FileHandler(tornado.web.RequestHandler):
+    """Обработчик для доступа к файлам через URL"""
+    
+    def get(self):
+        file_path = self.get_argument('file', None)
+        if not file_path:
+            self.set_status(400)
+            self.write("Не указан путь к файлу")
+            return
+        
+        # Декодируем путь
+        file_path = urllib.parse.unquote(file_path)
+        
+        # Проверяем, существует ли файл
+        if not os.path.exists(file_path) or not os.path.isfile(file_path):
+            self.set_status(404)
+            self.write(f"Файл не найден: {file_path}")
+            return
+        
+        # Определяем MIME-тип
+        content_type, _ = mimetypes.guess_type(file_path)
+        if content_type:
+            self.set_header('Content-Type', content_type)
+        
+        # Отправляем файл
+        with open(file_path, 'rb') as f:
+            self.write(f.read())
+
+def create_video_html(video_path):
+    """
+    Создает HTML-код для отображения только видео.
+    
+    Args:
+        video_path (str): Путь к видео-файлу
+        
+    Returns:
+        str: HTML-код с видеоплеером
+    """
+    container_id = f"media_container_video"
+    
+    html = f"""
+    <div id="{container_id}" class="media-container">
+        <style>
+            .media-container {{
+                margin: 15px 0;
+                padding: 15px;
+                border: 1px solid #ddd;
+                border-radius: 5px;
+                background-color: #f9f9f9;
+            }}
+            .video-container {{
+                margin-bottom: 15px;
+            }}
+            video {{
+                max-width: 100%;
+                max-height: 400px;
+            }}
+            .section-title {{
+                margin: 10px 0 5px 0;
+                font-weight: bold;
+            }}
+        </style>
+    """
+    
+    # Добавляем видеоплеер
+    html += """
+        <div class="section-title">Проверенное видео:</div>
+        <div class="video-container">
+    """
+    
+    # Формируем URL для видео, обеспечивающий доступ через веб
+    video_url = f"/file?file={video_path}"
+    
+    # Добавляем видеоплеер
+    html += f"""
+            <video controls>
+                <source src="{video_url}" type="video/mp4">
+                Ваш браузер не поддерживает тег video.
+            </video>
+        </div>
+    </div>
+    """
+    
+    return html
+
+def create_images_html(image_paths, item_id=None):
+    """
+    Создает HTML-код для отображения только изображений товара.
+    
+    Args:
+        image_paths (list): Список путей к изображениям
+        item_id (str, optional): ID товара для заголовка
+        
+    Returns:
+        str: HTML-код с изображениями
+    """
+    # Если нет изображений, возвращаем пустую строку
+    if not image_paths or len(image_paths) == 0:
+        return "<div>Изображения товара отсутствуют.</div>"
+    
+    # Создаем уникальный ID для контейнера, чтобы избежать конфликтов
+    container_id = f"images_container_{item_id if item_id else 'main'}"
+    
+    html = f"""
+    <div id="{container_id}" class="images-container-wrapper">
+        <style>
+            .images-container-wrapper {{
+                margin: 10px 0;
+                padding: 10px;
+                border: 1px solid #eee;
+                border-radius: 5px;
+                background-color: #fafafa;
+            }}
+            .images-container {{
+                display: flex;
+                flex-wrap: wrap;
+                gap: 10px;
+                margin-top: 10px;
+            }}
+            .image-item {{
+                border: 1px solid #ccc;
+                padding: 5px;
+                text-align: center;
+                background: white;
+                box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+            }}
+            .image-item img {{
+                max-width: 150px;
+                max-height: 150px;
+                object-fit: contain;
+            }}
+        </style>
+    """
+    
+    html += """<div class="images-container">"""
+    
+    for i, img_path in enumerate(image_paths):
+        # Формируем URL для изображения
+        img_url = f"/file?file={img_path}"
+        img_name = os.path.basename(img_path)
+        
+        html += f"""
+        <div class="image-item">
+            <img src="{img_url}" alt="Изображение товара {i+1}">
+            <div>{img_name}</div>
+        </div>
+        """
+    
+    html += """</div></div>"""
+    
+    return html
 
 # Файл для сохранения путей к папкам
 PATHS_FILE = "saved_paths.json"
@@ -95,14 +253,14 @@ def estimate_optimal_workers():
         
         # Примерный объем памяти, необходимый для одной проверки (оценка)
         # Можно настроить этот параметр на основе экспериментов
-        memory_per_task = 2 * 1024 * 1024 * 1024  # 2 ГБ на задачу (примерно)
+        memory_per_task = 0.1 * 1024 * 1024 * 1024  # 2 ГБ на задачу (примерно)
         
         # Рассчитываем максимальное количество параллельных задач
         max_workers = max(1, int(free_memory / memory_per_task))
         
         # Ограничиваем максимальное количество работников 
         # для предотвращения перегрузки системы
-        return min(max_workers, 4)  # Не более 4 параллельных процессов
+        return min(max_workers, 6)  # Не более 4 параллельных процессов
     except Exception as e:
         print(f"Ошибка при оценке оптимального количества воркеров: {e}")
         return 1  # В случае ошибки используем один воркер
@@ -168,9 +326,9 @@ def batch_check(start_index, end_index, data_folder):
         print(f"Обработка батча {batch_idx + 1}/{total_batches} (индексы {batch[0]}-{batch[-1]})")
         
         # Очищаем кэш CUDA перед началом нового батча, а не перед каждой проверкой
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-            print(f"Кэш CUDA очищен перед батчем {batch_idx + 1}")
+        # if torch.cuda.is_available():
+        #     torch.cuda.empty_cache()
+        #     print(f"Кэш CUDA очищен перед батчем {batch_idx + 1}")
         
         # Запускаем параллельную обработку для текущего батча
         with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
@@ -231,19 +389,19 @@ def run_check():
         from test_model import check
         
         # Очищаем кэш CUDA перед запуском проверки
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-            # Добавляем информацию о GPU в лог
-            with open(log_file, 'a', encoding='utf-8') as f:
-                f.write(f"\nИнформация о GPU:\n")
-                f.write(f"CUDA доступна: {torch.cuda.is_available()}\n")
-                if torch.cuda.is_available():
-                    f.write(f"Устройств CUDA: {torch.cuda.device_count()}\n")
-                    for i in range(torch.cuda.device_count()):
-                        props = torch.cuda.get_device_properties(i)
-                        f.write(f"GPU {i}: {props.name}\n")
-                        f.write(f"  Общая память: {props.total_memory / 1024 / 1024 / 1024:.2f} ГБ\n")
-                        f.write(f"  Вычислительная способность: {props.major}.{props.minor}\n")
+        # if torch.cuda.is_available():
+        #     torch.cuda.empty_cache()
+        #     # Добавляем информацию о GPU в лог
+        #     with open(log_file, 'a', encoding='utf-8') as f:
+        #         f.write(f"\nИнформация о GPU:\n")
+        #         f.write(f"CUDA доступна: {torch.cuda.is_available()}\n")
+        #         if torch.cuda.is_available():
+        #             f.write(f"Устройств CUDA: {torch.cuda.device_count()}\n")
+        #             for i in range(torch.cuda.device_count()):
+        #                 props = torch.cuda.get_device_properties(i)
+        #                 f.write(f"GPU {i}: {props.name}\n")
+        #                 f.write(f"  Общая память: {props.total_memory / 1024 / 1024 / 1024:.2f} ГБ\n")
+        #                 f.write(f"  Вычислительная способность: {props.major}.{props.minor}\n")
         
         # Запускаем проверку в основном потоке
         # Это блокирует интерфейс, но зато надежно работает
@@ -253,7 +411,11 @@ def run_check():
         with use_scope("results", clear=True):
             # Если результат - словарь (новый формат)
             if isinstance(result, dict):
-                put_markdown("## Результаты проверки")
+                # Формируем заголовок
+                status_icon = "✅" if result.get("found_items", []) else "❌"
+                header_text = f"Индекс {index} {status_icon} {'' if result.get('found_items', []) else '(Товары не найдены)'}"
+                
+                put_markdown(f"## {header_text}")
                 
                 # Информация о времени обработки
                 if "processing_time" in result:
@@ -263,21 +425,38 @@ def run_check():
                 if not result["success"]:
                     put_error(f"Ошибка при проверке: {result['message']}")
                 
-                # Информация о найденных/не найденных товарах
+                # Добавляем видеоплеер, если есть путь к видео (только один раз в начале)
+                if "video_path" in result and os.path.exists(result["video_path"]):
+                    # Создаем HTML для видеоплеера
+                    video_html = create_video_html(result["video_path"])
+                    put_html(video_html)
+                
+                # Информация о найденных товарах
                 if "found_items" in result and result["found_items"]:
                     put_markdown("### Найденные товары в видео")
                     for item in result["found_items"]:
-                        put_markdown(f"**Товар {item['id']}**")
+                        put_markdown(f"**[Товар {item['id']}](https://www.wildberries.ru/catalog/{item['id']}/detail.aspx)**")
                         put_text(f"Найден на таймкодах: {', '.join([str(t) for t in item['timecodes']])}")
                         put_text(f"Проверенные изображения: {', '.join(item['checked_images'])}")
+                        
+                        # Добавляем спойлер с изображениями товара
+                        if "image_paths" in item:
+                            images_html = create_images_html(item["image_paths"], item["id"])
+                            put_collapse("Просмотреть изображения товара", put_html(images_html))
                 
+                # Информация о не найденных товарах
                 if "not_found_items" in result and result["not_found_items"]:
                     put_markdown("### Товары, не найденные в видео")
                     for item in result["not_found_items"]:
-                        put_markdown(f"**Товар {item['id']}**")
+                        put_markdown(f"**[Товар {item['id']}](https://www.wildberries.ru/catalog/{item['id']}/detail.aspx)**")
                         if "error" in item:
                             put_text(f"Причина: {item['error']}")
                         put_text(f"Проверенные изображения: {', '.join(item['checked_images'])}")
+                        
+                        # Добавляем спойлер с изображениями товара
+                        if "image_paths" in item:
+                            images_html = create_images_html(item["image_paths"], item["id"])
+                            put_collapse("Просмотреть изображения товара", put_html(images_html))
                 
                 # Подробный лог
                 if "raw_log" in result:
@@ -384,21 +563,38 @@ def run_batch_check():
                 # Создаем содержимое для аккордеона
                 content = []
                 
-                # Информация о найденных/не найденных товарах
+                # Добавляем видеоплеер, если есть путь к видео (только один раз в начале)
+                if "video_path" in result and os.path.exists(result["video_path"]):
+                    # Создаем HTML для видеоплеера
+                    video_html = create_video_html(result["video_path"])
+                    content.append(put_html(video_html))
+                
+                # Информация о найденных товарах
                 if "found_items" in result and result["found_items"]:
                     content.append(put_markdown("#### Найденные товары в видео"))
                     for item in result["found_items"]:
-                        content.append(put_markdown(f"**Товар {item['id']}**"))
+                        content.append(put_markdown(f"**[Товар {item['id']}](https://www.wildberries.ru/catalog/{item['id']}/detail.aspx)**"))
                         content.append(put_text(f"Найден на таймкодах: {', '.join([str(t) for t in item['timecodes']])}"))
                         content.append(put_text(f"Проверенные изображения: {', '.join(item['checked_images'])}"))
+                        
+                        # Добавляем спойлер с изображениями товара
+                        if "image_paths" in item:
+                            images_html = create_images_html(item["image_paths"], item["id"])
+                            content.append(put_collapse("Просмотреть изображения товара", put_html(images_html)))
                 
+                # Информация о не найденных товарах
                 if "not_found_items" in result and result["not_found_items"]:
                     content.append(put_markdown("#### Товары, не найденные в видео"))
                     for item in result["not_found_items"]:
-                        content.append(put_markdown(f"**Товар {item['id']}**"))
+                        content.append(put_markdown(f"**[Товар {item['id']}](https://www.wildberries.ru/catalog/{item['id']}/detail.aspx)**")) #put_markdown(f"**Товар {item['id']}**")
                         if "error" in item:
                             content.append(put_text(f"Причина: {item['error']}"))
                         content.append(put_text(f"Проверенные изображения: {', '.join(item['checked_images'])}"))
+                        
+                        # Добавляем спойлер с изображениями товара
+                        if "image_paths" in item:
+                            images_html = create_images_html(item["image_paths"], item["id"])
+                            content.append(put_collapse("Просмотреть изображения товара", put_html(images_html)))
                 
                 # Для ошибки
                 if not result.get("success", True):
@@ -725,11 +921,39 @@ def open_browser():
     time.sleep(1)
     webbrowser.open("http://localhost:8080/")
 
+def start_app():
+    """Запускает приложение с кастомным обработчиком файлов"""
+    import tornado.ioloop
+    import tornado.web
+    
+    # Получаем обработчик для WebIO
+    webio_handler_instance = webio_handler(main)
+    
+    # Создаем приложение с нашими обработчиками
+    app = Application([
+        # Обработчик для веб-интерфейса
+        (r"/", webio_handler_instance),
+        # Обработчик для /file=... URL
+        (r"/file", FileHandler),
+        # Обработчик для статических файлов (если нужно)
+        (r"/static/(.*)", StaticFileHandler, {"path": os.path.abspath("./static")})
+    ])
+    
+    # Запускаем сервер
+    app.listen(8080)
+    print(f"Сервер запущен на http://localhost:8080/")
+    
+    # Запускаем цикл событий
+    tornado.ioloop.IOLoop.current().start()
+
 if __name__ == '__main__':
     # Открываем браузер в отдельном потоке
     browser_thread = threading.Thread(target=open_browser)
     browser_thread.daemon = True
     browser_thread.start()
     
+    # Создаем папку для статических файлов, если нужно
+    os.makedirs("static", exist_ok=True)
+    
     # Запускаем приложение
-    start_server(main, port=8080, debug=True)
+    start_app()

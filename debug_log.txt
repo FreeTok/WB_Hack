@@ -1,4 +1,4 @@
-Начало проверки с индексом 2 и папкой D:/Hackatons/WB_Hack/data
+Начало проверки с индексом 88888 и папкой D:/Hackatons/WB_Hack/data
 
 Информация о GPU:
 CUDA доступна: True

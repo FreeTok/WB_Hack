@@ -25,8 +25,8 @@ def get_yolo_model():
         try:
             print(f"Загрузка модели YOLO на {device}...")
             # Очищаем кэш CUDA перед загрузкой модели
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
+            # if torch.cuda.is_available():
+            #     torch.cuda.empty_cache()
             
             # Загружаем модель YOLO
             global_yolo_model = YOLO("yolo11n.pt", verbose=False)
@@ -227,9 +227,9 @@ def extract_and_process_frames(video_path, frame_rate=1):
         fps = int(cap.get(cv2.CAP_PROP_FPS)) if int(cap.get(cv2.CAP_PROP_FPS)) > 0 else 30
         
         # Очищаем кэш CUDA только один раз перед всей обработкой
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-            print("Очищен кэш CUDA перед началом обработки")
+        # if torch.cuda.is_available():
+        #     torch.cuda.empty_cache()
+        #     print("Очищен кэш CUDA перед началом обработки")
         
         print(f"Извлечение и обработка кадров из видео: {video_path}")
         print(f"Частота кадров: {fps}, частота извлечения: {frame_rate}")
@@ -598,12 +598,16 @@ def optimized_check(i, data_folder=None):
                 results_dict["not_found_items"].append(item_result)
                 result += f"  ВНИМАНИЕ: Товар {imageid} не найден в видео!\n"
         
-        # Удаляем временное видео, если оно не нужно для дальнейшей обработки
-        try:
-            # Если нужно сохранить видео для отладки, закомментируйте эту строку
-            os.remove(output_video)
-        except Exception as e:
-            result += f"Предупреждение: Не удалось удалить временное видео: {str(e)}\n"
+        # Сохраняем путь к видео в результат для дальнейшей визуализации
+        results_dict["video_path"] = output_video
+        result += f"Видео сохранено: {output_video}\n"
+
+        # Сохраняем пути к изображениям товаров для визуализации
+        for imageid in images:
+            for item in results_dict["found_items"] + results_dict["not_found_items"]:
+                if item["id"] == imageid:
+                    item["image_paths"] = images[imageid]
+                    break
     
     except Exception as e:
         import traceback
