@@ -12,6 +12,7 @@ import json
 import os
 import subprocess
 import sys
+import torch
 
 # Импортируем модуль для предварительной загрузки моделей
 from model_preloader import start_preloading, get_loading_status
@@ -25,8 +26,8 @@ def load_paths():
         try:
             with open(PATHS_FILE, 'r', encoding='utf-8') as f:
                 return json.load(f)
-        except (json.JSONDecodeError, IOError):
-            print(f"Ошибка чтения файла {PATHS_FILE}, создаем новый словарь")
+        except (json.JSONDecodeError, IOError) as e:
+            print(f"Ошибка чтения файла {PATHS_FILE} ({e}), создаем новый словарь")
     
     return {"folder1": "", "folder2": ""}
 
@@ -108,14 +109,62 @@ def run_check():
         # Импортируем функцию напрямую
         from test_model import check
         
+        # Очищаем кэш CUDA перед запуском проверки
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            # Добавляем информацию о GPU в лог
+            with open(log_file, 'a', encoding='utf-8') as f:
+                f.write(f"\nИнформация о GPU:\n")
+                f.write(f"CUDA доступна: {torch.cuda.is_available()}\n")
+                if torch.cuda.is_available():
+                    f.write(f"Устройств CUDA: {torch.cuda.device_count()}\n")
+                    for i in range(torch.cuda.device_count()):
+                        props = torch.cuda.get_device_properties(i)
+                        f.write(f"GPU {i}: {props.name}\n")
+                        f.write(f"  Общая память: {props.total_memory / 1024 / 1024 / 1024:.2f} ГБ\n")
+                        f.write(f"  Вычислительная способность: {props.major}.{props.minor}\n")
+        
         # Запускаем проверку в основном потоке
         # Это блокирует интерфейс, но зато надежно работает
         result = check(index, data_folder=data_folder)
         
         # Обновляем UI с результатами
         with use_scope("results", clear=True):
-            put_markdown("## Результаты проверки")
-            put_code(result)
+            # Если результат - словарь (новый формат)
+            if isinstance(result, dict):
+                put_markdown("## Результаты проверки")
+                
+                # Информация о времени обработки
+                if "processing_time" in result:
+                    put_info(f"Время обработки: {result['processing_time']:.2f} секунд")
+                
+                # Статус проверки
+                if not result["success"]:
+                    put_error(f"Ошибка при проверке: {result['message']}")
+                
+                # Информация о найденных/не найденных товарах
+                if "found_items" in result and result["found_items"]:
+                    put_markdown("### Найденные товары в видео")
+                    for item in result["found_items"]:
+                        put_markdown(f"**Товар {item['id']}**")
+                        put_text(f"Найден на таймкодах: {', '.join([str(t) for t in item['timecodes']])}")
+                        put_text(f"Проверенные изображения: {', '.join(item['checked_images'])}")
+                
+                if "not_found_items" in result and result["not_found_items"]:
+                    put_markdown("### Товары, не найденные в видео")
+                    for item in result["not_found_items"]:
+                        put_markdown(f"**Товар {item['id']}**")
+                        if "error" in item:
+                            put_text(f"Причина: {item['error']}")
+                        put_text(f"Проверенные изображения: {', '.join(item['checked_images'])}")
+                
+                # Подробный лог
+                if "raw_log" in result:
+                    put_collapse("Подробный лог", put_code(result["raw_log"]))
+            else:
+                # Если результат - строка (старый формат)
+                put_markdown("## Результаты проверки")
+                put_code(result)
             
             # Добавляем ссылку на лог для отладки
             put_text("Для отладки доступен подробный лог:")
@@ -198,14 +247,47 @@ def update_loading_status():
     # Иначе продолжаем проверку каждую секунду
     return True
 
+def check_gpu_status():
+    """Проверяет статус GPU и выводит информацию"""
+    info_str = ""
+    
+    if torch.cuda.is_available():
+        info_str += "GPU доступен: ДА\n"
+        info_str += f"Количество устройств CUDA: {torch.cuda.device_count()}\n"
+        
+        for i in range(torch.cuda.device_count()):
+            props = torch.cuda.get_device_properties(i)
+            info_str += f"GPU {i}: {props.name}\n"
+            info_str += f"  Общая память: {props.total_memory / 1024 / 1024 / 1024:.2f} ГБ\n"
+            info_str += f"  Вычислительная способность: {props.major}.{props.minor}\n"
+        
+        # Информация о текущем использовании памяти
+        info_str += "\nТекущее использование памяти:\n"
+        for i in range(torch.cuda.device_count()):
+            torch.cuda.set_device(i)
+            allocated = torch.cuda.memory_allocated() / 1024 / 1024
+            reserved = torch.cuda.memory_reserved() / 1024 / 1024
+            info_str += f"  GPU {i}: Выделено {allocated:.2f} МБ, Зарезервировано {reserved:.2f} МБ\n"
+    else:
+        info_str += "GPU доступен: НЕТ\n"
+        info_str += "Будет использован CPU, что значительно замедлит работу.\n"
+    
+    return info_str
+
 def main():
     """Основная функция приложения"""
     set_env(title="Проверка товаров в видео")
+    
+    # Проверяем статус GPU
+    gpu_info = check_gpu_status()
     
     # Запускаем загрузку моделей
     preload_thread = start_preloading()
     
     put_markdown("# Проверка товаров в видео")
+    
+    # Выводим информацию о GPU
+    put_collapse("Информация о GPU", put_code(gpu_info))
     
     # Добавляем контейнер для индикатора загрузки моделей
     html_loading = """
@@ -322,9 +404,10 @@ def main():
     put_markdown("## Результаты")
     put_scope("results")
     
-    # Кнопка очистки путей
+    # Кнопка очистки путей и закрытия приложения
     put_markdown("---")
     put_row([
+        put_button("Очистить кэш CUDA", onclick=clear_cuda, color='primary'),
         put_button("Очистить пути", onclick=clear_paths, color='warning'),
         put_button("Закрыть приложение", onclick=lambda: exit(), color='danger'),
     ])
@@ -340,6 +423,24 @@ def main():
     while True:
         check_results()
         time.sleep(0.5)
+
+def clear_cuda():
+    """Очищает кэш CUDA"""
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+        info_str = "Кэш CUDA очищен!\n\n"
+        
+        # Информация о текущем использовании памяти
+        info_str += "Текущее использование памяти:\n"
+        for i in range(torch.cuda.device_count()):
+            torch.cuda.set_device(i)
+            allocated = torch.cuda.memory_allocated() / 1024 / 1024
+            reserved = torch.cuda.memory_reserved() / 1024 / 1024
+            info_str += f"GPU {i}: Выделено {allocated:.2f} МБ, Зарезервировано {reserved:.2f} МБ\n"
+        
+        toast(info_str)
+    else:
+        toast("CUDA недоступна в системе.")
 
 def clear_paths():
     """Очищает сохраненные пути к папкам"""
