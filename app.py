@@ -13,6 +13,9 @@ import os
 import subprocess
 import sys
 import torch
+import concurrent.futures
+from functools import partial
+import multiprocessing
 
 # Импортируем модуль для предварительной загрузки моделей
 from model_preloader import start_preloading, get_loading_status
@@ -75,6 +78,124 @@ def check_results():
             results_queue.task_done()
         except queue.Empty:
             break
+
+def estimate_optimal_workers():
+    """
+    Оценивает оптимальное количество параллельных работников в зависимости от доступной памяти GPU.
+    """
+    if not torch.cuda.is_available():
+        # Если GPU недоступен, используем количество ядер CPU
+        return max(1, multiprocessing.cpu_count() - 1)
+    
+    try:
+        # Получаем информацию о доступной памяти GPU
+        device = torch.cuda.current_device()
+        total_memory = torch.cuda.get_device_properties(device).total_memory
+        free_memory = total_memory - torch.cuda.memory_allocated(device) - torch.cuda.memory_reserved(device)
+        
+        # Примерный объем памяти, необходимый для одной проверки (оценка)
+        # Можно настроить этот параметр на основе экспериментов
+        memory_per_task = 2 * 1024 * 1024 * 1024  # 2 ГБ на задачу (примерно)
+        
+        # Рассчитываем максимальное количество параллельных задач
+        max_workers = max(1, int(free_memory / memory_per_task))
+        
+        # Ограничиваем максимальное количество работников 
+        # для предотвращения перегрузки системы
+        return min(max_workers, 4)  # Не более 4 параллельных процессов
+    except Exception as e:
+        print(f"Ошибка при оценке оптимального количества воркеров: {e}")
+        return 1  # В случае ошибки используем один воркер
+
+def batch_check(start_index, end_index, data_folder):
+    """
+    Выполняет пакетную проверку для указанного диапазона индексов.
+    
+    Args:
+        start_index (int): Начальный индекс
+        end_index (int): Конечный индекс
+        data_folder (str): Путь к папке с данными
+        
+    Returns:
+        dict: Результаты проверки для всех индексов
+    """
+    # Время начала
+    start_time = time.time()
+    
+    # Создаем словарь для результатов
+    all_results = {
+        "start_index": start_index,
+        "end_index": end_index,
+        "total_processed": 0,
+        "results": {},
+        "errors": [],
+        "total_time": 0,
+        "avg_time_per_item": 0
+    }
+    
+    # Определяем количество воркеров
+    workers = estimate_optimal_workers()
+    print(f"Оптимальное количество параллельных задач: {workers}")
+    
+    # Функция для обработки одного индекса
+    def process_single_index(index):
+        try:
+            # Импортируем функцию напрямую
+            from test_model import check
+            # Вызываем функцию проверки
+            result = check(index, data_folder=data_folder)
+            return index, result
+        except Exception as e:
+            import traceback
+            return index, {
+                "success": False, 
+                "message": f"Ошибка при проверке индекса {index}: {str(e)}",
+                "error_traceback": traceback.format_exc()
+            }
+    
+    # Создаем диапазон индексов для обработки
+    indices = range(start_index, end_index + 1)
+    
+    # Разбиваем индексы на батчи
+    batch_size = max(1, workers * 2)  # Чтобы всегда были задачи для воркеров
+    batches = [indices[i:i + batch_size] for i in range(0, len(indices), batch_size)]
+    
+    # Общее количество батчей
+    total_batches = len(batches)
+    
+    # Обрабатываем каждый батч
+    for batch_idx, batch in enumerate(batches):
+        print(f"Обработка батча {batch_idx + 1}/{total_batches} (индексы {batch[0]}-{batch[-1]})")
+        
+        # Очищаем кэш CUDA перед началом нового батча, а не перед каждой проверкой
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            print(f"Кэш CUDA очищен перед батчем {batch_idx + 1}")
+        
+        # Запускаем параллельную обработку для текущего батча
+        with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
+            batch_results = list(executor.map(process_single_index, batch))
+        
+        # Добавляем результаты в общий словарь
+        for index, result in batch_results:
+            all_results["results"][str(index)] = result
+            all_results["total_processed"] += 1
+            
+            # Если есть ошибка, добавляем ее в список ошибок
+            if not result.get("success", True):
+                all_results["errors"].append({
+                    "index": index,
+                    "message": result.get("message", "Неизвестная ошибка")
+                })
+    
+    # Рассчитываем общее время выполнения
+    all_results["total_time"] = time.time() - start_time
+    
+    # Рассчитываем среднее время на проверку одного элемента
+    if all_results["total_processed"] > 0:
+        all_results["avg_time_per_item"] = all_results["total_time"] / all_results["total_processed"]
+    
+    return all_results
 
 def run_check():
     """Запускает проверку с указанным индексом"""
@@ -186,6 +307,130 @@ def run_check():
             put_code(error_trace)
             put_file('debug_log.txt', open(log_file, 'rb').read(), 'Скачать лог для отладки')
 
+def run_batch_check():
+    """
+    Функция для запуска пакетной проверки.
+    Запрашивает у пользователя начальный и конечный индексы и запускает проверку.
+    """
+    # Проверяем, готовы ли модели
+    status = get_loading_status()
+    if not status["loaded"]:
+        put_error(f"Модели еще не загружены. Пожалуйста, подождите.\n{status['status']}")
+        return
+    
+    # Проверяем, выбрана ли папка с данными
+    if not folder_paths["folder1"]:
+        put_error("Сначала выберите папку с данными!")
+        return
+    
+    # Получаем начальный и конечный индексы от пользователя
+    start_index = pyinput("Введите начальный индекс:", type='number', value=0)
+    end_index = pyinput("Введите конечный индекс:", type='number', value=10)
+    
+    # Проверяем корректность индексов
+    if start_index > end_index:
+        put_error("Начальный индекс не может быть больше конечного!")
+        return
+    
+    # Создаем область для результатов и показываем индикатор загрузки
+    with use_scope("results", clear=True):
+        put_loading(shape='grow')
+        put_text(f"Запуск пакетной проверки индексов {start_index}-{end_index}, пожалуйста подождите...")
+    
+    # Получаем путь к папке с данными
+    data_folder = folder_paths["folder1"]
+    
+    # Создаем именованный временный файл для логов
+    log_file = "batch_check_log.txt"
+    with open(log_file, 'w', encoding='utf-8') as f:
+        f.write(f"Начало пакетной проверки с индексами {start_index}-{end_index} и папкой {data_folder}\n")
+    
+    try:
+        # Запускаем пакетную проверку
+        results = batch_check(start_index, end_index, data_folder)
+        
+        # Обновляем UI с результатами
+        with use_scope("results", clear=True):
+            put_markdown("## Результаты пакетной проверки")
+            
+            # Информация о времени обработки
+            put_info(f"Всего проверено: {results['total_processed']} индексов")
+            put_info(f"Общее время: {results['total_time']:.2f} секунд")
+            put_info(f"Среднее время на элемент: {results['avg_time_per_item']:.2f} секунд")
+            
+            # Если есть ошибки
+            if results["errors"]:
+                put_markdown("### Ошибки при проверке")
+                for error in results["errors"]:
+                    put_error(f"Индекс {error['index']}: {error['message']}")
+            
+            # Результаты для каждого индекса
+            put_markdown("### Результаты по индексам")
+            
+            # Создаем аккордеон для результатов
+            for index, result in results["results"].items():
+                # Формируем заголовок аккордеона
+                header = f"Индекс {index}"
+                
+                # Добавляем индикатор в зависимости от наличия найденных товаров
+                if result.get("success", True):
+                    if "found_items" in result and result["found_items"]:
+                        header += f" ✅ (Найдено товаров: {len(result['found_items'])})"
+                    else:
+                        header += f" ❌ (Товары не найдены)"
+                else:
+                    header += " ⚠️ (Ошибка проверки)"
+                
+                # Создаем содержимое для аккордеона
+                content = []
+                
+                # Информация о найденных/не найденных товарах
+                if "found_items" in result and result["found_items"]:
+                    content.append(put_markdown("#### Найденные товары в видео"))
+                    for item in result["found_items"]:
+                        content.append(put_markdown(f"**Товар {item['id']}**"))
+                        content.append(put_text(f"Найден на таймкодах: {', '.join([str(t) for t in item['timecodes']])}"))
+                        content.append(put_text(f"Проверенные изображения: {', '.join(item['checked_images'])}"))
+                
+                if "not_found_items" in result and result["not_found_items"]:
+                    content.append(put_markdown("#### Товары, не найденные в видео"))
+                    for item in result["not_found_items"]:
+                        content.append(put_markdown(f"**Товар {item['id']}**"))
+                        if "error" in item:
+                            content.append(put_text(f"Причина: {item['error']}"))
+                        content.append(put_text(f"Проверенные изображения: {', '.join(item['checked_images'])}"))
+                
+                # Для ошибки
+                if not result.get("success", True):
+                    content.append(put_error(result.get("message", "Неизвестная ошибка")))
+                
+                # Добавляем подробный лог
+                if "raw_log" in result:
+                    content.append(put_collapse("Подробный лог", put_code(result["raw_log"])))
+                
+                # Добавляем аккордеон с результатами
+                put_collapse(header, content)
+            
+            # Добавляем ссылку на лог для отладки
+            put_text("Для отладки доступен подробный лог:")
+            put_file('batch_check_log.txt', open(log_file, 'rb').read(), 'Скачать лог')
+            
+    except Exception as e:
+        import traceback
+        error_trace = traceback.format_exc()
+        
+        # Записываем ошибку в лог
+        with open(log_file, 'a', encoding='utf-8') as f:
+            f.write(f"\nОшибка при выполнении пакетной проверки:\n{str(e)}\n")
+            f.write(error_trace)
+        
+        # Обновляем UI с сообщением об ошибке
+        with use_scope("results", clear=True):
+            put_error("Произошла ошибка при выполнении пакетной проверки:")
+            put_code(str(e))
+            put_code(error_trace)
+            put_file('batch_check_log.txt', open(log_file, 'rb').read(), 'Скачать лог для отладки')
+
 # Функция для обновления состояния загрузки на странице
 def update_loading_status():
     """Обновляет статус загрузки моделей на странице"""
@@ -213,26 +458,37 @@ def update_loading_status():
         }}
     ''')
     
-    # Если модели загружены, обновляем кнопку запуска
+    # Если модели загружены, обновляем кнопки запуска
     if status['loaded']:
         with use_scope('check_button_area', clear=True):
-            put_button(
-                label="Запустить проверку", 
-                onclick=run_check, 
-                color='success',
-                disabled=False,
-                scope='check_button_area'
-            )
-    # Если произошла ошибка, тоже обновляем кнопку, но предупреждаем об ошибке
+            put_row([
+                put_button(
+                    label="Проверить один индекс", 
+                    onclick=run_check, 
+                    color='primary',
+                    disabled=False,
+                    scope='check_button_area'
+                ),
+                put_button(
+                    label="Пакетная проверка", 
+                    onclick=run_batch_check, 
+                    color='success',
+                    disabled=False,
+                    scope='check_button_area'
+                )
+            ])
+    # Если произошла ошибка, тоже обновляем кнопки, но предупреждаем об ошибке
     elif status['error']:
         with use_scope('check_button_area', clear=True):
-            put_button(
-                label="Модели не загружены (ошибка)", 
-                onclick=lambda: toast("Необходимо перезапустить приложение"), 
-                color='danger',
-                disabled=False,
-                scope='check_button_area'
-            )
+            put_row([
+                put_button(
+                    label="Модели не загружены (ошибка)", 
+                    onclick=lambda: toast("Необходимо перезапустить приложение"), 
+                    color='danger',
+                    disabled=False,
+                    scope='check_button_area'
+                )
+            ])
     
     # Если есть ошибка, показываем её
     if status['error']:
@@ -389,16 +645,25 @@ def main():
     # Поле для ввода индекса и кнопка запуска проверки
     put_markdown("## Запуск проверки")
     
-    # Добавляем кнопку запуска с использованием PyWebIO API
+    # Добавляем кнопки запуска с использованием PyWebIO API
     with use_scope('check_button_area'):
-        # Кнопка будет неактивна при старте, и станет активной после загрузки моделей
-        put_button(
-            label="Загрузка моделей...", 
-            onclick=run_check, 
-            color='primary',
-            disabled=True,
-            scope='check_button_area'
-        )
+        # Кнопки будут неактивны при старте, и станут активными после загрузки моделей
+        put_row([
+            put_button(
+                label="Проверить один индекс", 
+                onclick=run_check, 
+                color='primary',
+                disabled=True,
+                scope='check_button_area'
+            ),
+            put_button(
+                label="Пакетная проверка", 
+                onclick=run_batch_check, 
+                color='success',
+                disabled=True,
+                scope='check_button_area'
+            )
+        ])
     
     # Область для вывода результатов
     put_markdown("## Результаты")
