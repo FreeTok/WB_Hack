@@ -56,7 +56,7 @@ class FileHandler(tornado.web.RequestHandler):
 
 def create_video_html(video_path):
     """
-    Создает HTML-код для отображения только видео.
+    Создает HTML-код для отображения только видео с поддержкой перематывания.
     
     Args:
         video_path (str): Путь к видео-файлу
@@ -64,7 +64,10 @@ def create_video_html(video_path):
     Returns:
         str: HTML-код с видеоплеером
     """
-    container_id = f"media_container_video"
+    # Генерируем уникальный ID для плеера
+    import uuid
+    player_id = f"videoplayer_{uuid.uuid4().hex[:8]}"
+    container_id = f"media_container_{uuid.uuid4().hex[:8]}"
     
     html = f"""
     <div id="{container_id}" class="media-container">
@@ -87,6 +90,29 @@ def create_video_html(video_path):
                 margin: 10px 0 5px 0;
                 font-weight: bold;
             }}
+            /* Добавим явные стили для элементов управления */
+            video::-webkit-media-controls-panel {{
+                display: flex !important;
+                opacity: 1 !important;
+            }}
+            video::-webkit-media-controls-play-button {{
+                display: block !important;
+            }}
+            video::-webkit-media-controls-timeline {{
+                display: block !important;
+            }}
+            video::-webkit-media-controls-current-time-display {{
+                display: block !important;
+            }}
+            video::-webkit-media-controls-time-remaining-display {{
+                display: block !important;
+            }}
+            video::-webkit-media-controls-mute-button {{
+                display: block !important;
+            }}
+            video::-webkit-media-controls-volume-slider {{
+                display: block !important;
+            }}
         </style>
     """
     
@@ -99,14 +125,52 @@ def create_video_html(video_path):
     # Формируем URL для видео, обеспечивающий доступ через веб
     video_url = f"/file?file={video_path}"
     
-    # Добавляем видеоплеер
+    # Добавляем видеоплеер с дополнительными атрибутами
     html += f"""
-            <video controls>
+            <video id="{player_id}" controls preload="metadata" controlsList="nodownload" disablePictureInPicture disableRemotePlayback playsinline>
                 <source src="{video_url}" type="video/mp4">
                 Ваш браузер не поддерживает тег video.
             </video>
         </div>
     </div>
+    
+    <script>
+    (function() {{
+        // Функция для инициализации видеоплеера
+        function initializePlayer() {{
+            const player = document.getElementById('{player_id}');
+            if (!player) return;
+            
+            // Обеспечиваем, что элементы управления всегда доступны
+            player.controls = true;
+            
+            // Добавляем обработчики событий для перехвата кликов по элементам управления
+            player.addEventListener('click', function(e) {{
+                e.stopPropagation();
+            }});
+            
+            // Предотвращаем всплытие событий для элементов управления
+            const controls = player.querySelectorAll('*');
+            controls.forEach(control => {{
+                control.addEventListener('click', function(e) {{
+                    e.stopPropagation();
+                }});
+            }});
+        }}
+        
+        // Запускаем инициализацию сразу при загрузке DOM
+        if (document.readyState === 'loading') {{
+            document.addEventListener('DOMContentLoaded', initializePlayer);
+        }} else {{
+            initializePlayer();
+        }}
+        
+        // Также добавляем проверку через setTimeout на случай, если DOM обновляется асинхронно
+        setTimeout(initializePlayer, 500);
+        setTimeout(initializePlayer, 1000);
+        setTimeout(initializePlayer, 2000);
+    }})();
+    </script>
     """
     
     return html
@@ -177,6 +241,60 @@ def create_images_html(image_paths, item_id=None):
     html += """</div></div>"""
     
     return html
+
+def add_collapse_fix_script():
+    """
+    Добавляет JavaScript для исправления работы видео в спойлерах
+    """
+    script = """
+    <script>
+    (function() {
+        // Функция для модификации поведения спойлеров с видео
+        function fixVideoCollapse() {
+            // Находим все .collapse-btn (кнопки спойлеров в PyWebIO)
+            const collapseBtns = document.querySelectorAll('.collapse-btn');
+            
+            collapseBtns.forEach(btn => {
+                // Проверяем, есть ли видео в связанном контенте
+                const collapseId = btn.getAttribute('data-target');
+                if (!collapseId) return;
+                
+                const collapseContent = document.querySelector(collapseId);
+                if (!collapseContent) return;
+                
+                const hasVideo = collapseContent.querySelector('video');
+                if (!hasVideo) return;
+                
+                // Модифицируем обработчик клика, чтобы предотвратить всплытие событий от видео
+                btn.addEventListener('click', function() {
+                    // Находим все видео внутри этого спойлера
+                    const videos = collapseContent.querySelectorAll('video');
+                    videos.forEach(video => {
+                        // Устанавливаем обработчики событий для предотвращения всплытия
+                        video.addEventListener('click', function(e) {
+                            e.stopPropagation();
+                        });
+                        
+                        // Обеспечиваем, что элементы управления видео работают
+                        video.controls = true;
+                    });
+                });
+            });
+        }
+        
+        // Запускаем исправление спойлеров через небольшую задержку, чтобы DOM успел загрузиться
+        setTimeout(fixVideoCollapse, 500);
+        setTimeout(fixVideoCollapse, 2000);
+        // Также запускаем при каждом изменении DOM
+        const observer = new MutationObserver(fixVideoCollapse);
+        observer.observe(document.body, {
+            childList: true,
+            subtree: true
+        });
+    })();
+    </script>
+    """
+    put_html(script)
 
 # Файл для сохранения путей к папкам
 PATHS_FILE = "saved_paths.json"
@@ -373,6 +491,7 @@ def run_check():
     
     # Создаем область для результатов и показываем индикатор загрузки
     with use_scope("results", clear=True):
+        add_collapse_fix_script()
         put_loading(shape='grow')
         put_text("Запуск проверки, пожалуйста подождите...")
     
@@ -513,6 +632,7 @@ def run_batch_check():
     
     # Создаем область для результатов и показываем индикатор загрузки
     with use_scope("results", clear=True):
+        add_collapse_fix_script()
         put_loading(shape='grow')
         put_text(f"Запуск пакетной проверки индексов {start_index}-{end_index}, пожалуйста подождите...")
     
