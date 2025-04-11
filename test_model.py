@@ -21,6 +21,8 @@ import time
 
 from test_comparison import compare_video_image
 
+from test1 import testDef
+
 def check(i):
     startTime = time.time()
     images = {}
@@ -56,7 +58,7 @@ def check(i):
         print(f'############### {imageid}')
         for image in images[imageid]:
             # print(image)
-            compare_video_image(image, output_video)
+            testDef(image, output_video)
 
     print(f'lasted: {time.time() - startTime}')
     os.remove(output_video)
