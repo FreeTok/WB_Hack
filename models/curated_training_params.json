@@ -1,0 +1,14 @@
+{
+  "data_file": "curated_data/training_data.json",
+  "output_dir": "models",
+  "backbone": "efficientnet_b0",
+  "embedding_dim": 512,
+  "batch_size": 24,
+  "epochs": 50,
+  "learning_rate": 0.0001,
+  "val_split": 0.2,
+  "margin": 0.5,
+  "seed": 42,
+  "mixed_precision": true,
+  "debug": false
+}
