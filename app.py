@@ -771,10 +771,6 @@ def main():
             )
         ])
     
-    put_markdown("## Проверка для экспертов")
-    put_info("Модуль для расширенной проверки, требует настройки экспертом.")
-    put_button("Запустить экспертную проверку", onclick=expert_check, color='warning')
-    
     put_markdown("## Результаты")
     put_scope("results")
     
@@ -807,38 +803,6 @@ def start_app():
     print(f"Сервер запущен на http://localhost:8080/")
     
     tornado.ioloop.IOLoop.current().start()
-
-def expert_check():
-    status = get_loading_status()
-    if not status["loaded"]:
-        put_error("Модели еще не загружены. Пожалуйста, подождите.")
-        return
-    
-    if not folder_paths["folder1"]:
-        put_error("Сначала выберите папку с данными!")
-        return
-    
-    with use_scope("results", clear=True):
-        put_loading(shape='grow')
-        put_text("Запуск экспертной проверки, пожалуйста подождите...")
-    
-    try:
-        from test_comparison import expert_custom_check
-        
-        result = expert_custom_check(folder_paths["folder1"])
-        
-        with use_scope("results", clear=True):
-            if isinstance(result, str):
-                put_text(result)
-            else:
-                put_code(str(result))
-                
-    except ImportError:
-        with use_scope("results", clear=True):
-            put_error("Функция expert_custom_check не найдена в файле test_comparison.py")
-    except Exception as e:
-        with use_scope("results", clear=True):
-            put_error(f"Ошибка при выполнении экспертной проверки: {str(e)}")
 
 if __name__ == '__main__':
     browser_thread = threading.Thread(target=open_browser)
