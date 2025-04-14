@@ -556,13 +556,103 @@ if __name__ == "__main__":
         print(result["raw_log"])
 
 
-def expert_custom_check(data_folder):
+def compare_images_with_video(image_paths, video_path, threshold=THRESHOLD):
     """
-    Функция для кастомной экспертной проверки.
-    Args:
-        data_folder (str): Путь к папке с данными
-    """
-    # Вы можете заполнить эту функцию своей логикой
-    # Нужно вернуть то, что будет отображено в интерфейсе
+    Функция для сравнения набора изображений с видео.
     
-    return "Функция expert_custom_check не реализована. Реализуйте её в файле test_comparison.py."
+    Args:
+        image_paths (list): Список путей к изображениям
+        video_path (str): Путь к видео-файлу
+        threshold (float, optional): Пороговое значение для определения совпадения. По умолчанию THRESHOLD
+        
+    Returns:
+        tuple: (matched, timecodes) - нашлось ли совпадение и на каких таймкодах
+    """
+    try:
+        if not image_paths or not video_path:
+            print("Не указаны пути к изображениям или видео")
+            return (False, [])
+        
+        # Проверка существования файлов
+        for img_path in image_paths:
+            if not os.path.exists(img_path):
+                print(f"Ошибка: Файл изображения не существует - {img_path}")
+                return (False, [])
+        
+        if not os.path.exists(video_path):
+            print(f"Ошибка: Файл видео не существует - {video_path}")
+            return (False, [])
+        
+        # Извлечение и обработка кадров из видео
+        processed_frames = extract_and_process_frames(video_path)
+        
+        if not processed_frames:
+            print("Не удалось извлечь кадры из видео или не найдены объекты")
+            return (False, [])
+        
+        matched = False
+        timecodes = []
+        
+        # Обработка каждого изображения
+        for img_path in image_paths:
+            print(f"Проверка изображения: {img_path}")
+            
+            try:
+                # Загрузка изображения
+                product_img = Image.open(img_path)
+                if product_img.mode != 'RGB':
+                    product_img = product_img.convert('RGB')
+                
+                # Обнаружение объектов на изображении с помощью YOLO
+                if device.type == 'cuda':
+                    with torch.amp.autocast('cuda'):
+                        results = get_yolo_model()(np.array(product_img), verbose=False)
+                else:
+                    results = get_yolo_model()(np.array(product_img), verbose=False)
+                
+                detections = get_detections(results)
+                
+                if not detections:
+                    print(f"На изображении {img_path} не обнаружены объекты")
+                    continue
+                
+                # Вырезание обнаруженных объектов
+                cropped_objects = crop_objects(product_img, detections)
+                
+                if not cropped_objects:
+                    print(f"Не удалось вырезать объекты из изображения {img_path}")
+                    continue
+                
+                # Извлечение признаков из объектов
+                product_features = [get_feature_vector(img) for img in cropped_objects]
+                product_features = [f for f in product_features if f is not None]
+                
+                if not product_features:
+                    print(f"Не удалось извлечь признаки из изображения {img_path}")
+                    continue
+                
+                # Сравнение признаков с кадрами из видео
+                for frame in processed_frames:
+                    if compare_features(product_features, frame.feature_vectors, threshold):
+                        matched = True
+                        timecodes.append(frame.time_code)
+                
+                if matched:
+                    print(f"Найдено совпадение для изображения {img_path}")
+                
+            except Exception as e:
+                print(f"Ошибка при обработке изображения {img_path}: {str(e)}")
+                import traceback
+                print(traceback.format_exc())
+        
+        # Удаление дубликатов и сортировка таймкодов
+        if matched and timecodes:
+            timecodes = sorted(list(set(timecodes)))
+        
+        return (matched, timecodes)
+        
+    except Exception as e:
+        import traceback
+        print(f"Ошибка при сравнении изображений с видео: {str(e)}")
+        print(traceback.format_exc())
+        return (False, [])

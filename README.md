@@ -23,19 +23,14 @@
 
 ## Установка
 
-### 1. Клонирование репозитория
-```bash
-git clone https://github.com/ваш-репозиторий/система-проверки-товаров.git
-```
-
-### 2. Установка зависимостей
+### 1. Установка зависимостей
 ```bash
 pip install -r requirements.txt
 pip3 install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu126
 ```
 Также нужно скачать ffmpeg (https://www.ffmpeg.org/) и добавить его в PATH
 
-### 3. Скачивание моделей
+### 2. Скачивание моделей
 Система автоматически скачивает и использует модели YOLO и EfficientNet. Модель YOLO (`yolo11n.pt`) должна находиться в корневой директории проекта.
 
 ## Использование
@@ -51,6 +46,31 @@ python app.py
 1. Выберите папку с данными, содержащую `videos.json` и подпапки с изображениями
 2. Дождитесь загрузки моделей (индикатор покажет прогресс)
 3. Введите индекс записи для проверки или используйте пакетную проверку
+
+### Запуск через функцию compare_images_with_video из test_comparison.py
+
+Пример использования 
+```python
+from test_comparison import compare_images_with_video
+
+# Список путей к изображениям для сравнения
+image_paths = [
+    "path/to/image1.jpg",
+    "path/to/image2.jpg"
+]
+
+# Путь к видеофайлу
+video_path = "path/to/video.mp4"
+
+# Выполнение сравнения
+matched, timecodes = compare_images_with_video(image_paths, video_path)
+
+# Проверка результатов
+if matched:
+    print(f"Найдены совпадения! Таймкоды: {timecodes}")
+else:
+    print("Совпадения не обнаружены")
+```
 
 ### Структура данных
 Система ожидает следующую структуру данных:
@@ -104,7 +124,7 @@ python test_comparison.py --index 0 --data path/to/data --debug
 В файле `test_comparison.py` можно настраивать порог сходства:
 
 ```python
-
+THRESHOLD = 0.5
 ```
 
 ### Другие параметры
