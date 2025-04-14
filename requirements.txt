@@ -1,5 +1,11 @@
-scikit-learn
-pywebio
-ultralytics
-pip3 install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu126
-Pillow
+matplotlib==3.10.1
+numpy==2.2.4
+opencv_python==4.11.0.86
+Pillow==11.2.1
+pywebio==1.8.4
+scikit_learn==1.6.1
+torch==2.6.0+cu124
+torchvision==0.21.0+cu124
+tornado==6.4.2
+tqdm==4.67.1
+ultralytics==8.3.105
