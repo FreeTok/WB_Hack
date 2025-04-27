@@ -539,21 +539,201 @@ def optimized_check(i, data_folder=None):
     
     return results_dict
 
-if __name__ == "__main__":
-    print("Оптимизированная система для проверки товаров в видео")
+def optimized_check2(i, data_folder = None):
+    """
+    Оптимизированная функция проверки наличия товара в видео.
     
-    import sys
-    if len(sys.argv) > 1:
-        index = int(sys.argv[1])
-        data_folder = None
-        if len(sys.argv) > 2:
-            data_folder = sys.argv[2]
+    Args:
+        i (int): Индекс записи в JSON-файле
+        data_folder (str, optional): Путь к папке с данными
+    
+    Returns:
+        dict: Результат проверки с подробной информацией
+    """
+    startTime = time.time()
+    images = {}
+    result = ""
+    results_dict = {"success": True, "found_any" : False,  "message": "", "found_items": [], "not_found_items": [], "errors": []}
+
+    if data_folder is None:
+        default_paths = [
+            r'C:\Users\FreeTok\Desktop\data',
+            r'D:\Hackatons\WB_Hack\data',
+            r'D:\Hackatons\data',
+            'data'
+        ]
         
-        result = optimized_check(index, data_folder)
-        print(result["raw_log"])
-    else:
-        result = optimized_check(0)
-        print(result["raw_log"])
+        for path in default_paths:
+            if os.path.exists(path):
+                data_folder = path
+                break
+        
+        if data_folder is None:
+            error_msg = "ОШИБКА: Не удалось найти папку с данными. Укажите путь явно."
+            results_dict["success"] = False
+            results_dict["message"] = error_msg
+            results_dict["errors"].append(error_msg)
+            return results_dict
+    
+    if not os.path.exists(data_folder):
+        error_msg = f"ОШИБКА: Папка с данными {data_folder} не найдена."
+        results_dict["success"] = False
+        results_dict["message"] = error_msg
+        results_dict["errors"].append(error_msg)
+        return results_dict
+    
+    try:
+        import csv
+        import json
+        import subprocess
+        
+        with open('test_df_2.csv', 'r', encoding='utf-8') as f:
+            data = list(csv.reader(f))
+            row = data[i]
+            print(row)
+            d = row
+            result += f"Обрабатываю запись: {d}\n"
+            results_dict["record"] = d
+            
+            video_url = row[0]
+            
+            os.makedirs('temp', exist_ok=True)
+            
+            os.makedirs('test', exist_ok=True)
+            
+            output_video = os.path.join('temp', f'output_video_{i}.mp4')
+            
+            ffmpeg_path = 'ffmpeg'
+            for possible_path in ['./Ffmpeg/bin/ffmpeg.exe', './ffmpeg.exe', 'ffmpeg.exe']:
+                if os.path.exists(possible_path):
+                    ffmpeg_path = possible_path
+                    break
+            
+            if os.path.exists(output_video):
+                file_size = os.path.getsize(output_video)
+                if file_size > 1024:  
+                    result += f"Используем существующее видео {output_video}...\n"
+                else:
+                    os.remove(output_video)
+                    result += f"Скачиваю видео {video_url}...\n"
+                    command = [
+                        ffmpeg_path,
+                        '-i', video_url,
+                        '-c', 'copy',
+                        '-v', 'error',
+                        output_video
+                    ]
+                    subprocess.run(command)
+            else:
+                result += f"Скачиваю видео {video_url}...\n"
+                command = [
+                    ffmpeg_path,
+                    '-i', video_url,
+                    '-c', 'copy',
+                    '-v', 'error',
+                    output_video
+                ]
+                subprocess.run(command)
+            
+            if not os.path.exists(output_video) or os.path.getsize(output_video) < 1024:
+                error_msg = f"ОШИБКА: Не удалось скачать видео {video_url}. Проверьте, установлен ли ffmpeg."
+                results_dict["success"] = False
+                results_dict["message"] = error_msg
+                results_dict["errors"].append(error_msg)
+                return results_dict
+            
+            result += "Анализ товаров:\n"
+            for id in [row[1]]:
+                item_result = {"id": id, "found": False, "timecodes": [], "checked_images": []}
+                smallImages = []
+                
+                image_paths = [
+                    os.path.join(data_folder, f"images_1/{id}/1.webp"),
+                    os.path.join(data_folder, f"images_2-3/{id}/2.webp"),
+                    os.path.join(data_folder, f"images_2-3/{id}/3.webp"),
+                    os.path.join(data_folder, f"images_4-5/{id}/4.webp"),
+                    os.path.join(data_folder, f"images_4-5/{id}/5.webp")
+                ]
+                
+                for path in image_paths:
+                    if os.path.exists(path):
+                        smallImages.append(path)
+                        item_result["checked_images"].append(os.path.basename(path))
+                
+                if not smallImages:
+                    item_result["error"] = f"Не найдены изображения для товара {id}"
+                    results_dict["not_found_items"].append(item_result)
+                    result += f"  ВНИМАНИЕ: Не найдены изображения для товара {id}!\n"
+                    continue
+                
+                images.update({id: smallImages})
+        
+        for imageid in images:
+            result += f"Проверка товара {imageid}:\n"
+            
+            match_result = optimized_compare_video_image(images[imageid], output_video, debug_save=False)
+            
+            item_result = {"id": imageid, "found": False, "timecodes": [], "checked_images": [p.split('/')[-1] for p in images[imageid]]}
+            
+            if match_result and match_result[0]:
+                results_dict["found_any"] = True
+                item_result["found"] = True
+                item_result["timecodes"] = match_result[1]
+                results_dict["found_items"].append(item_result)
+                result += f"  - Найдено совпадение в видео! Таймкоды: {match_result[1]}\n"
+            else:
+                item_result["error"] = f"Товар {imageid} не найден в видео"
+                results_dict["not_found_items"].append(item_result)
+                result += f"  ВНИМАНИЕ: Товар {imageid} не найден в видео!\n"
+        
+        results_dict["video_path"] = output_video
+        result += f"Видео сохранено: {output_video}\n"
+
+        for imageid in images:
+            for item in results_dict["found_items"] + results_dict["not_found_items"]:
+                if item["id"] == imageid:
+                    item["image_paths"] = images[imageid]
+                    break
+    
+    except Exception as e:
+        print(e)
+        import traceback
+        error_trace = traceback.format_exc()
+        error_msg = f"Произошла ошибка при обработке:\n{str(e)}\n\n{error_trace}"
+        
+        results_dict["success"] = False
+        results_dict["message"] = str(e)
+        results_dict["errors"].append(error_msg)
+        result += error_msg
+    
+    elapsed_time = time.time() - startTime
+    result += f"\nОбработка завершена за {elapsed_time:.2f} секунд"
+    
+    results_dict["processing_time"] = elapsed_time
+    results_dict["raw_log"] = result
+    
+    return results_dict
+
+
+# if __name__ == "__main__":
+#     import csv
+#     with open('test_df_2.csv', 'r', encoding='utf-8') as f:
+#         data = list(csv.reader(f))
+#         print(len(data))
+
+    
+    # import sys
+    # if len(sys.argv) > 1:
+    #     index = int(sys.argv[1])
+    #     data_folder = None
+    #     if len(sys.argv) > 2:
+    #         data_folder = sys.argv[2]
+        
+    #     result = optimized_check(index, data_folder)
+    #     print(result["raw_log"])
+    # else:
+    #     result = optimized_check(0)
+    #     print(result["raw_log"])
 
 
 def compare_images_with_video(image_paths, video_path, threshold=THRESHOLD):

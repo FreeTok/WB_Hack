@@ -24,7 +24,7 @@ import tornado.web
 import urllib.parse
 
 from model_preloader import start_preloading, get_loading_status
-from test_comparison import optimized_check as check
+from test_comparison import optimized_check2 as check
 
 class FileHandler(tornado.web.RequestHandler):
     
@@ -811,4 +811,19 @@ if __name__ == '__main__':
     
     os.makedirs("static", exist_ok=True)
     
-    start_app()
+    # batch_check(0, 2000, None)
+    rawdata = batch_check(0, 2000-1, None)['results']
+
+    data = []
+    for d in rawdata.values():
+        newData = (d['record'][0], d['record'][1], d['found_any'])
+        data.append(newData)
+
+
+    import csv
+    with open('results.csv', 'w', newline='', encoding='utf-8') as file:
+        writer = csv.writer(file)
+        writer.writerows(data)  # Записываем все строки
+
+    
+    # start_app()
